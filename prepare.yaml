@@ -56,7 +56,7 @@
       #  datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ vm_name }}"
-        state: shutdown-guest
+        state: powered-off   #shutdown-guest
       register: shutdown_result
 
     - name: Capture the shutdown date automatically
