@@ -102,7 +102,7 @@
         hostname: '{{ lookup("env", "VMWARE_HOST") }}'
         username: '{{ lookup("env", "VMWARE_USER") }}'
         password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
-      #  datacenter: "{{ vcenter_datacenter }}"
+        datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ renamed_vm_name }}"
       register: vm_disk_facts
