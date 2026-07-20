@@ -29,29 +29,11 @@
       when: (candidate_disks_sorted | length == 0) or ((candidate_disks_sorted | first).size_gb | float) > (budget_remaining_gb | float)
 
     - name: Remove each qualifying disk that still fits the remaining run budget
-      when: (budget_remaining_gb | float) >= (item.size_gb | float)
+      ansible.builtin.include_tasks: remove_single_disk.yml
       loop: "{{ candidate_disks_sorted }}"
       loop_control:
         label: "{{ item.label }}"
-      block:
-
-        - name: "Remove disk: {{ item.label }}"
-          community.vmware.vmware_guest_disk:
-            hostname: '{{ lookup("env", "VMWARE_HOST") }}'
-            username: '{{ lookup("env", "VMWARE_USER") }}'
-            password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
-            datacenter: "{{ vcenter_datacenter }}"
-            validate_certs: false
-            name: "{{ vm_record.server_name }}"
-            disk:
-              - state: absent
-                controller_number: "{{ item.scsi_controller }}"
-                unit_number: "{{ item.unit_number }}"
-
-        - name: Track this removal against the run budget
-          ansible.builtin.set_fact:
-            removed_disk_keys: "{{ removed_disk_keys + [item.disk_key] }}"
-            budget_remaining_gb: "{{ (budget_remaining_gb | float) - (item.size_gb | float) }}"
+      when: (budget_remaining_gb | float) >= (item.size_gb | float)
 
     - name: Log the outcome for this VM (only if at least one disk was removed)
       when: removed_disk_keys | length > 0
