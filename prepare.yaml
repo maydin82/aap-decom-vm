@@ -29,8 +29,8 @@
     git_repo_url: "https://github.com/maydin82/aap-decom-vm.git"   # <-- set this to your actual repo
     repo_path: "/tmp/track"
     repo_name: "aap-decom-vm"
-    git_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
-    git_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
+    github_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
+    github_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
     log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
     repo_branch: "main"
     five_tb_gb: 5120   # 5 TB in GB (binary/TiB-based; use 5000 for decimal TB)
