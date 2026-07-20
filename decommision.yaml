@@ -57,13 +57,20 @@
       ansible.builtin.set_fact:
         decom_lines: "{{ lookup('file', log_file).splitlines() }}"
 
+    - name: Read the decommission list into lines
+      ansible.builtin.set_fact:
+        decom_lines: "{{ lookup('file', log_file).splitlines() }}"
+
     - name: Parse each non-empty line into a record
       ansible.builtin.set_fact:
         decom_records: "{{ decom_records | default([]) + [ item | from_json ] }}"
       loop: "{{ decom_lines }}"
       when: item | trim | length > 0
       loop_control:
-        label: "line {{ ansible_loop.index }}"
+        label: "line {{ line_index }}"
+      loop_control:
+        loop_var: item
+        index_var: line_index
 
     # ---------------------------------------------------------------
     # Append-only file -> dedupe to the LAST entry per server_name.
