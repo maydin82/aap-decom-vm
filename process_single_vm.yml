@@ -1,0 +1,111 @@
+---
+# process_single_vm.yml
+# Included per eligible VM (vm_record) from vm_decommission_scheduled_job.yml.
+# Removes AT MOST ONE disk from this VM, and only if it fits within the
+# shared per-run budget (budget_remaining_gb, a fact that persists and
+# decreases across the whole loop in the parent playbook).
+#
+# If this was the VM's last remaining disk, the VM itself is removed too.
+#
+# Always appends a new line to the log file rather than editing history -
+# the next scheduled run works from whatever this new line says.
+
+- name: Process this VM only if the run's removal budget isn't already used up
+  when: (budget_remaining_gb | float) > 0
+  block:
+
+    - name: Find disks on this VM that are under 5TB AND fit the remaining budget
+      ansible.builtin.set_fact:
+        candidate_disks: "{{ vm_record.disks | selectattr('size_gb', '<', five_tb_gb) | selectattr('size_gb', '<=', budget_remaining_gb | float) | list }}"
+
+    - name: No disk on this VM fits this run - leave it for next time
+      ansible.builtin.debug:
+        msg: "{{ vm_record.server_name }}: no qualifying disk fits the remaining {{ budget_remaining_gb }} GB budget this run - skipping until next run."
+      when: candidate_disks | length == 0
+
+    - name: Handle this VM's disk/VM removal
+      when: candidate_disks | length > 0
+      block:
+
+        - name: Pick the largest disk that fits the remaining budget
+          ansible.builtin.set_fact:
+            disk_to_remove: "{{ (candidate_disks | sort(attribute='size_gb') | list | last) }}"
+
+        - name: Remove the selected disk
+          community.vmware.vmware_guest_disk:
+            hostname: '{{ lookup("env", "VMWARE_HOST") }}'
+            username: '{{ lookup("env", "VMWARE_USER") }}'
+            password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
+            datacenter: "{{ vcenter_datacenter }}"
+            validate_certs: false
+            name: "{{ vm_record.server_name }}"
+            disk:
+              - state: absent
+                controller_number: "{{ disk_to_remove.controller_key }}"
+                unit_number: "{{ disk_to_remove.unit_number }}"
+
+        - name: Deduct this disk from the run's remaining budget
+          ansible.builtin.set_fact:
+            budget_remaining_gb: "{{ (budget_remaining_gb | float) - (disk_to_remove.size_gb | float) }}"
+            processed_count: "{{ (processed_count | int) + 1 }}"
+
+        - name: Work out what's left on this VM after removal
+          ansible.builtin.set_fact:
+            remaining_disks: "{{ vm_record.disks | rejectattr('disk_key', 'equalto', disk_to_remove.disk_key) | list }}"
+
+        - name: Remove the whole VM if no disks remain
+          when: remaining_disks | length == 0
+          block:
+            - name: Remove the VM (no disks left to track)
+              community.vmware.vmware_guest:
+                hostname: '{{ lookup("env", "VMWARE_HOST") }}'
+                username: '{{ lookup("env", "VMWARE_USER") }}'
+                password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
+                datacenter: "{{ vcenter_datacenter }}"
+                validate_certs: false
+                name: "{{ vm_record.server_name }}"
+                state: absent
+
+            - name: Append "vm_removed" status line
+              ansible.builtin.lineinfile:
+                path: "{{ log_file }}"
+                line: >-
+                  {{ {
+                    'server_name': vm_record.server_name,
+                    'original_name': vm_record.original_name,
+                    'shutdown_date': vm_record.shutdown_date,
+                    'status': 'vm_removed',
+                    'disks': [],
+                    'total_disk_gb': 0,
+                    'needs_manual_review': false,
+                    'action_date': ansible_date_time.date
+                  } | to_json }}
+                create: true
+                insertafter: EOF
+
+        - name: Log the remaining disks if the VM still has some
+          when: remaining_disks | length > 0
+          block:
+            - name: Recompute remaining total and manual-review flag
+              ansible.builtin.set_fact:
+                remaining_total_gb: "{{ remaining_disks | map(attribute='size_gb') | map('float') | sum }}"
+                remaining_needs_manual_review: "{{ (remaining_disks | selectattr('size_gb', '<', five_tb_gb) | list | length) == 0 }}"
+
+            - name: Append "disks_partial_removed" status line
+              ansible.builtin.lineinfile:
+                path: "{{ log_file }}"
+                line: >-
+                  {{ {
+                    'server_name': vm_record.server_name,
+                    'original_name': vm_record.original_name,
+                    'shutdown_date': vm_record.shutdown_date,
+                    'status': 'disks_partial_removed',
+                    'disk_removed': disk_to_remove.disk_key,
+                    'disks': remaining_disks,
+                    'total_disk_gb': remaining_total_gb,
+                    'needs_manual_review': remaining_needs_manual_review,
+                    'action_date': ansible_date_time.date
+                  } | to_json }}
+                create: true
+                insertafter: EOF
+
