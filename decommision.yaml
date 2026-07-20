@@ -1,4 +1,4 @@
-
+---
 # vm_decommission_scheduled_job.yml
 # Runs HOURLY. Reads the decommission list (JSONL, append-only) and, for
 # eligible VMs:
@@ -22,11 +22,11 @@
   gather_facts: true   # needed for ansible_date_time.date
 
   vars:
-    git_repo_url: "https://github.com/maydin82/aap-decom-vm.git"   # <-- set this to your actual repo
     repo_path: "/tmp/track"
     repo_name: "aap-decom-vm"
     github_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
     github_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
+    repo_path: "/tmp/decom-tracking"
     log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
     repo_branch: "main"
     min_days_before_action: 7
@@ -39,11 +39,17 @@
     # 0. Clone the repo fresh - AAP execution environments are
     #    ephemeral, so there's no persistent clone to pull into.
     # ---------------------------------------------------------------
+    - name: Build authenticated clone URL (kept out of logs)
+      ansible.builtin.set_fact:
+        git_repo_url_authenticated: "https://{{ github_username }}:{{ github_token }}@github.com/maydin82/{{ repo_name }}.git"
+      no_log: true
+
     - name: Clone the repo
       ansible.builtin.git:
-        repo: "https://{{ github_username }}:{{ github_token }}@github.com/{{ github_username }}/{{ repo_name }}.git"
+        repo: "{{ git_repo_url_authenticated }}"
         dest: "{{ repo_path }}"
         version: "{{ repo_branch }}"
+      no_log: true
 
     - name: Set git identity for commits (container has none by default)
       ansible.builtin.command:
@@ -53,9 +59,6 @@
         - 'user.email "aap-decom-automation@yourorg.com"'
         - 'user.name "AAP Decom Automation"'
       changed_when: false
-    - name: Read the decommission list into lines
-      ansible.builtin.set_fact:
-        decom_lines: "{{ lookup('file', log_file).splitlines() }}"
 
     - name: Read the decommission list into lines
       ansible.builtin.set_fact:

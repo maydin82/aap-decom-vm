@@ -41,7 +41,7 @@
             name: "{{ vm_record.server_name }}"
             disk:
               - state: absent
-                controller_number: "{{ disk_to_remove.controller_key }}"
+                controller_number: "{{ disk_to_remove.scsi_controller }}"
                 unit_number: "{{ disk_to_remove.unit_number }}"
 
         - name: Deduct this disk from the run's remaining budget

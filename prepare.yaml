@@ -26,11 +26,11 @@
   gather_facts: true   # needed for ansible_date_time.date
 
   vars:
-    git_repo_url: "https://github.com/maydin82/aap-decom-vm.git"   # <-- set this to your actual repo
     repo_path: "/tmp/track"
     repo_name: "aap-decom-vm"
     github_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
     github_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
+    repo_path: "/tmp/decom-tracking"
     log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
     repo_branch: "main"
     five_tb_gb: 5120   # 5 TB in GB (binary/TiB-based; use 5000 for decimal TB)
@@ -42,12 +42,17 @@
     # 0. Clone the repo fresh - AAP execution environments are
     #    ephemeral, so there's no persistent clone to pull into.
     # ---------------------------------------------------------------
+    - name: Build authenticated clone URL (kept out of logs)
+      ansible.builtin.set_fact:
+        git_repo_url_authenticated: "https://{{ github_username }}:{{ github_token }}@github.com/maydin82/{{ repo_name }}.git"
+      no_log: true
 
     - name: Clone the repo
       ansible.builtin.git:
-        repo: "https://{{ github_username }}:{{ github_token }}@github.com/{{ github_username }}/{{ repo_name }}.git"
+        repo: "{{ git_repo_url_authenticated }}"
         dest: "{{ repo_path }}"
         version: "{{ repo_branch }}"
+      no_log: true
 
     - name: Set git identity for commits (container has none by default)
       ansible.builtin.command:
@@ -57,6 +62,7 @@
         - 'user.email "aap-decom-automation@yourorg.com"'
         - 'user.name "AAP Decom Automation"'
       changed_when: false
+
     # ---------------------------------------------------------------
     # 1. Shut the VM down (no deletion here)
     # ---------------------------------------------------------------
@@ -65,10 +71,10 @@
         hostname: '{{ lookup("env", "VMWARE_HOST") }}'
         username: '{{ lookup("env", "VMWARE_USER") }}'
         password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
-      #  datacenter: "{{ vcenter_datacenter }}"
+        datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ vm_name }}"
-        state: powered-off   #shutdown-guest
+        state: powered-off    #shutdown-guest
       register: shutdown_result
 
     - name: Capture the shutdown date automatically
@@ -82,7 +88,7 @@
         hostname: '{{ lookup("env", "VMWARE_HOST") }}'
         username: '{{ lookup("env", "VMWARE_USER") }}'
         password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
-      #  datacenter: "{{ vcenter_datacenter }}"
+        datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ vm_name }}"
       register: vm_info
@@ -99,7 +105,7 @@
         hostname: '{{ lookup("env", "VMWARE_HOST") }}'
         username: '{{ lookup("env", "VMWARE_USER") }}'
         password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
-      #  datacenter: "{{ vcenter_datacenter }}"
+        datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         uuid: "{{ vm_info.instance.hw_product_uuid }}"
         name: "{{ renamed_vm_name }}"
@@ -119,12 +125,40 @@
         name: "{{ renamed_vm_name }}"
       register: vm_disk_facts
 
+    - name: Gather VM controller info (need bus number, not controller_key, for later disk removal)
+      community.vmware.vmware_guest_controller_info:
+        hostname: '{{ lookup("env", "VMWARE_HOST") }}'
+        username: '{{ lookup("env", "VMWARE_USER") }}'
+        password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
+        datacenter: "{{ vcenter_datacenter }}"
+        validate_certs: false
+        name: "{{ renamed_vm_name }}"
+      register: vm_controller_info
+
+    # NOTE: verify these field names against your installed community.vmware
+    # collection version - they've shifted between releases. If this task
+    # fails or the lookup comes out empty, uncomment the debug task below to
+    # print the raw structure and adjust 'controller_key' / 'bus_number'
+    # to match what your version actually returns.
+    #
+    # - name: DEBUG - inspect raw controller info structure
+    #   ansible.builtin.debug:
+    #     var: vm_controller_info
+
+    - name: Build controller_key -> SCSI bus number lookup
+      ansible.builtin.set_fact:
+        controller_bus_lookup: "{{ controller_bus_lookup | default({}) | combine({ (item.controller_key | string): item.bus_number }) }}"
+      loop: "{{ vm_controller_info.guest_controllers }}"
+      loop_control:
+        label: "{{ item.controller_type | default('controller') }}"
+
     - name: Build disk list with a stable reference key per disk
       ansible.builtin.set_fact:
         vm_disks: "{{ vm_disks | default([]) + [ {
             'disk_key': item.value.key,
             'unit_number': item.value.unit_number,
             'controller_key': item.value.controller_key,
+            'scsi_controller': (controller_bus_lookup[item.value.controller_key | string] | int),
             'label': item.value.label,
             'size_gb': ((item.value.capacity_in_kb | int) / 1048576) | round(2)
           } ] }}"
