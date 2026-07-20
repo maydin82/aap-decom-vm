@@ -28,6 +28,8 @@
   vars:
     git_repo_url: "https://github.com/maydin82/aap-decom-vm.git"   # <-- set this to your actual repo
     repo_path: "/tmp/track"
+    git_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
+    git_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
     log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
     repo_branch: "main"
     five_tb_gb: 5120   # 5 TB in GB (binary/TiB-based; use 5000 for decimal TB)
@@ -39,11 +41,17 @@
     # 0. Clone the repo fresh - AAP execution environments are
     #    ephemeral, so there's no persistent clone to pull into.
     # ---------------------------------------------------------------
+    - name: Build authenticated clone URL (kept out of logs)
+      ansible.builtin.set_fact:
+        git_repo_url_authenticated: "https://{{ git_username }}:{{ git_token }}@{{ git_repo_url | regex_replace('^https://', '') }}"
+      no_log: true
+
     - name: Clone the repo
       ansible.builtin.git:
-        repo: "{{ git_repo_url }}"
+        repo: "{{ git_repo_url_authenticated }}"
         dest: "{{ repo_path }}"
         version: "{{ repo_branch }}"
+      no_log: true
 
     - name: Set git identity for commits (container has none by default)
       ansible.builtin.command:
