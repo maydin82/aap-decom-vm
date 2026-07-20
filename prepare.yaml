@@ -28,6 +28,7 @@
   vars:
     git_repo_url: "https://github.com/maydin82/aap-decom-vm.git"   # <-- set this to your actual repo
     repo_path: "/tmp/track"
+    repo_name: "aap-decom-vm"
     git_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
     git_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
     log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
@@ -48,7 +49,7 @@
 
     - name: Clone the repo
       ansible.builtin.git:
-        repo: "{{ git_repo_url_authenticated }}"
+        repo: "https://{{ github_username }}:{{ github_token }}@github.com/{{ github_username }}/{{ repo_name }}.git"
         dest: "{{ repo_path }}"
         version: "{{ repo_branch }}"
       no_log: true
