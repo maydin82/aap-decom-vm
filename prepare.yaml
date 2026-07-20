@@ -50,10 +50,10 @@
     # ---------------------------------------------------------------
     - name: Shut down guest OS gracefully
       community.vmware.vmware_guest_powerstate:
-        hostname: "{{ vcenter_hostname }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        datacenter: "{{ vcenter_datacenter }}"
+        host: '{{ lookup("env", "VMWARE_HOST") }}'
+        username: '{{ lookup("env", "VMWARE_USER") }}'
+        password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
+      #  datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ vm_name }}"
         state: shutdown-guest
@@ -70,7 +70,7 @@
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        datacenter: "{{ vcenter_datacenter }}"
+     #  datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ vm_name }}"
       register: vm_info
@@ -87,7 +87,7 @@
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        datacenter: "{{ vcenter_datacenter }}"
+     #  datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         uuid: "{{ vm_info.instance.hw_product_uuid }}"
         name: "{{ renamed_vm_name }}"
@@ -102,7 +102,7 @@
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
-        datacenter: "{{ vcenter_datacenter }}"
+     #  datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ renamed_vm_name }}"
       register: vm_disk_facts
