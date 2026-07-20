@@ -74,7 +74,7 @@
         datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ vm_name }}"
-        state: powered-off    #shutdown-guest
+        state: powered-off
       register: shutdown_result
 
     - name: Capture the shutdown date automatically
@@ -125,32 +125,41 @@
         name: "{{ renamed_vm_name }}"
       register: vm_disk_facts
 
-    - name: Gather VM controller info (need bus number, not controller_key, for later disk removal)
-      community.vmware.vmware_guest_controller_info:
+    - name: Gather VM hardware devices (need bus number, not controller_key, for later disk removal)
+      community.vmware.vmware_guest_info:
         hostname: '{{ lookup("env", "VMWARE_HOST") }}'
         username: '{{ lookup("env", "VMWARE_USER") }}'
         password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
         datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ renamed_vm_name }}"
-      register: vm_controller_info
+        schema: "vsphere"
+        properties:
+          - "config.hardware.device"
+      register: vm_hw_info
 
-    # NOTE: verify these field names against your installed community.vmware
-    # collection version - they've shifted between releases. If this task
-    # fails or the lookup comes out empty, uncomment the debug task below to
-    # print the raw structure and adjust 'controller_key' / 'bus_number'
-    # to match what your version actually returns.
-    #
-    # - name: DEBUG - inspect raw controller info structure
-    #   ansible.builtin.debug:
-    #     var: vm_controller_info
-
-    - name: Build controller_key -> SCSI bus number lookup
+    # config.hardware.device is a flat list of ALL hardware devices (disks,
+    # controllers, network adapters, etc). SCSI controller devices carry a
+    # 'busNumber' (0-3) that vmware_guest_disk_info does NOT expose - we
+    # need it to remove a disk later, so pull it from the raw device list
+    # by matching each disk's controller_key to a controller device's key.
+    - name: Build controller_key -> SCSI bus number lookup from raw hardware devices
       ansible.builtin.set_fact:
-        controller_bus_lookup: "{{ controller_bus_lookup | default({}) | combine({ (item.controller_key | string): item.bus_number }) }}"
-      loop: "{{ vm_controller_info.guest_controllers }}"
+        controller_bus_lookup: "{{ controller_bus_lookup | default({}) | combine({ (item.key | string): item.busNumber }) }}"
+      loop: "{{ vm_hw_info.instance.config.hardware.device | default([]) }}"
+      when: item.busNumber is defined
       loop_control:
-        label: "{{ item.controller_type | default('controller') }}"
+        label: "{{ item.key | default('device') }}"
+
+    # NOTE: pyVmomi's serialized field names for controller devices can
+    # vary slightly by community.vmware/pyVmomi version (e.g. 'busNumber'
+    # vs nested differently). If this lookup comes out empty, uncomment
+    # the debug task below to inspect the raw device structure and
+    # adjust the loop above accordingly.
+    #
+    # - name: DEBUG - inspect raw hardware device structure
+    #   ansible.builtin.debug:
+    #     var: vm_hw_info.instance.config.hardware.device
 
     - name: Build disk list with a stable reference key per disk
       ansible.builtin.set_fact:
