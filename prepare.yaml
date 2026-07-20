@@ -50,7 +50,7 @@
     # ---------------------------------------------------------------
     - name: Shut down guest OS gracefully
       community.vmware.vmware_guest_powerstate:
-        host: '{{ lookup("env", "VMWARE_HOST") }}'
+        hostname: '{{ lookup("env", "VMWARE_HOST") }}'
         username: '{{ lookup("env", "VMWARE_USER") }}'
         password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
       #  datacenter: "{{ vcenter_datacenter }}"
