@@ -1,0 +1,187 @@
+---
+# vm_decommission_log.yml
+# Shuts a VM down, renames it with a "willberemoved-" prefix (so it's
+# obvious in vCenter that it's queued for decom), gathers per-disk info
+# (with a stable reference key per disk), and appends that as a JSONL
+# record pushed to git.
+#
+# This playbook does NOT delete the VM or any disks, and does NOT decide
+# how removal should happen - it only records the disk list and flags
+# needs_manual_review if NONE of the disks are under 5TB (meaning the
+# scheduled job, which only ever removes a single sub-5TB disk at a
+# time, could never make progress on this VM automatically).
+#
+# A separate hourly scheduled job reads this list and does the actual
+# disk-by-disk and eventual VM removal.
+#
+# Expects these vars to be set:
+#   vm_name        : ORIGINAL name of the server being decommissioned
+#   vcenter_hostname / vcenter_username / vcenter_password / vcenter_datacenter
+#
+# shutdown_date is NOT passed in - it's captured automatically at the
+# moment the VM is shut down.
+
+- name: Shut down, rename, and queue VM for decommission
+  hosts: localhost
+  gather_facts: true   # needed for ansible_date_time.date
+
+  vars:
+    git_repo_url: "git@github.com:yourorg/decom-tracking.git"   # <-- set this to your actual repo
+    repo_path: "/opt/decom-tracking"
+    log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
+    repo_branch: "main"
+    five_tb_gb: 5120   # 5 TB in GB (binary/TiB-based; use 5000 for decimal TB)
+    decom_prefix: "willberemoved-"
+
+  tasks:
+
+    # ---------------------------------------------------------------
+    # 0. Clone the repo fresh - AAP execution environments are
+    #    ephemeral, so there's no persistent clone to pull into.
+    # ---------------------------------------------------------------
+    - name: Clone the repo
+      ansible.builtin.git:
+        repo: "{{ git_repo_url }}"
+        dest: "{{ repo_path }}"
+        version: "{{ repo_branch }}"
+
+    # ---------------------------------------------------------------
+    # 1. Shut the VM down (no deletion here)
+    # ---------------------------------------------------------------
+    - name: Shut down guest OS gracefully
+      community.vmware.vmware_guest_powerstate:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        validate_certs: false
+        name: "{{ vm_name }}"
+        state: shutdown-guest
+      register: shutdown_result
+
+    - name: Capture the shutdown date automatically
+      ansible.builtin.set_fact:
+        shutdown_date: "{{ ansible_date_time.date }}"
+
+    # Grab the UUID before renaming so the rename/lookup is unambiguous
+    # even if another VM happens to share a name transiently.
+    - name: Look up VM UUID
+      community.vmware.vmware_guest_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        validate_certs: false
+        name: "{{ vm_name }}"
+      register: vm_info
+
+    - name: Set the new (prefixed) VM name
+      ansible.builtin.set_fact:
+        renamed_vm_name: "{{ decom_prefix }}{{ vm_name }}"
+
+    # ---------------------------------------------------------------
+    # 2. Rename the VM in vCenter
+    # ---------------------------------------------------------------
+    - name: Rename VM with decommission prefix
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        validate_certs: false
+        uuid: "{{ vm_info.instance.hw_product_uuid }}"
+        name: "{{ renamed_vm_name }}"
+        state: present
+
+    # ---------------------------------------------------------------
+    # 3. Gather disk info under the NEW name, each disk keyed by its
+    #    real VMware identifiers
+    # ---------------------------------------------------------------
+    - name: Gather VM disk info
+      community.vmware.vmware_guest_disk_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        validate_certs: false
+        name: "{{ renamed_vm_name }}"
+      register: vm_disk_facts
+
+    - name: Build disk list with a stable reference key per disk
+      ansible.builtin.set_fact:
+        vm_disks: "{{ vm_disks | default([]) + [ {
+            'disk_key': item.value.key,
+            'unit_number': item.value.unit_number,
+            'controller_key': item.value.controller_key,
+            'label': item.value.label,
+            'size_gb': ((item.value.capacity_in_kb | int) / 1048576) | round(2)
+          } ] }}"
+      loop: "{{ vm_disk_facts.guest_disk_info | dict2items }}"
+      loop_control:
+        label: "{{ item.value.label }}"
+
+    - name: Compute total disk size
+      ansible.builtin.set_fact:
+        total_disk_gb: "{{ vm_disks | map(attribute='size_gb') | map('float') | sum }}"
+
+    # ---------------------------------------------------------------
+    # 4. Flag for manual review if NO disk is under 5TB (the scheduled
+    #    job can never make progress on this VM automatically - it
+    #    only ever removes one disk under 5TB at a time)
+    # ---------------------------------------------------------------
+    - name: Flag for manual review if no disk qualifies (all disks 5TB+)
+      ansible.builtin.set_fact:
+        needs_manual_review: "{{ (vm_disks | selectattr('size_gb', '<', five_tb_gb) | list | length) == 0 }}"
+
+    # ---------------------------------------------------------------
+    # 5. Log the record (git pull -> append JSONL line -> commit/push)
+    # ---------------------------------------------------------------
+    - name: Pull latest changes before appending
+      ansible.builtin.command:
+        cmd: git pull --rebase origin {{ repo_branch }}
+        chdir: "{{ repo_path }}"
+      changed_when: false
+
+    - name: Build the decommission record
+      ansible.builtin.set_fact:
+        decom_record:
+          server_name: "{{ renamed_vm_name }}"
+          original_name: "{{ vm_name }}"
+          shutdown_date: "{{ shutdown_date }}"
+          status: "shutdown_pending_decom"
+          disks: "{{ vm_disks }}"
+          total_disk_gb: "{{ total_disk_gb }}"
+          needs_manual_review: "{{ needs_manual_review }}"
+
+    - name: Append record as a single JSON line
+      ansible.builtin.lineinfile:
+        path: "{{ log_file }}"
+        line: "{{ decom_record | to_json }}"
+        create: true
+        insertafter: EOF
+
+    - name: Stage, commit, and push the update
+      block:
+        - name: git add
+          ansible.builtin.command:
+            cmd: git add decommissioned_vms.jsonl
+            chdir: "{{ repo_path }}"
+
+        - name: git commit
+          ansible.builtin.command:
+            cmd: >
+              git commit -m "Shutdown + renamed + queued for decom: {{ renamed_vm_name }} ({{ shutdown_date }})"
+            chdir: "{{ repo_path }}"
+          register: commit_result
+          failed_when: false
+
+        - name: git push
+          ansible.builtin.command:
+            cmd: git push origin {{ repo_branch }}
+            chdir: "{{ repo_path }}"
+          when: commit_result.rc == 0
+          register: push_result
+          retries: 3
+          delay: 5
+          until: push_result.rc == 0
+
