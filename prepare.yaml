@@ -26,7 +26,7 @@
   gather_facts: true   # needed for ansible_date_time.date
 
   vars:
-    git_repo_url: "github.com/maydin82/aap-decom-vm.git"   # <-- set this to your actual repo
+    git_repo_url: "https://github.com/maydin82/aap-decom-vm.git"   # <-- set this to your actual repo
     repo_path: "/opt/decom-tracking"
     log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
     repo_branch: "main"
