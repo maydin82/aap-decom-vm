@@ -45,6 +45,14 @@
         dest: "{{ repo_path }}"
         version: "{{ repo_branch }}"
 
+    - name: Set git identity for commits (container has none by default)
+      ansible.builtin.command:
+        cmd: "git config {{ item }}"
+        chdir: "{{ repo_path }}"
+      loop:
+        - 'user.email "aap-decom-automation@yourorg.com"'
+        - 'user.name "AAP Decom Automation"'
+      changed_when: false
     # ---------------------------------------------------------------
     # 1. Shut the VM down (no deletion here)
     # ---------------------------------------------------------------
