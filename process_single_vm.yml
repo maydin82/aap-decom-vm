@@ -1,11 +1,15 @@
 ---
 # process_single_vm.yml
 # Included per eligible VM (vm_record) from vm_decommission_scheduled_job.yml.
-# Removes AT MOST ONE disk from this VM, and only if it fits within the
-# shared per-run budget (budget_remaining_gb, a fact that persists and
-# decreases across the whole loop in the parent playbook).
 #
-# If this was the VM's last remaining disk, the VM itself is removed too.
+# Removes AS MANY qualifying disks (under 5TB each) from this VM as fit
+# within the shared per-run budget (budget_remaining_gb, a fact that
+# persists and decreases across the whole loop in the parent playbook -
+# so a big VM here leaves less budget for the next VM in the loop).
+#
+# If ALL disks end up removed (either already gone, or removed this run),
+# the VM itself is removed too - all in the same run, no waiting for a
+# separate pass.
 #
 # Always appends a new line to the log file rather than editing history -
 # the next scheduled run works from whatever this new line says.
@@ -14,24 +18,24 @@
   when: (budget_remaining_gb | float) > 0
   block:
 
-    - name: Find disks on this VM that are under 5TB AND fit the remaining budget
+    - name: Sort this VM's qualifying disks (smallest first, to fit as many as possible)
       ansible.builtin.set_fact:
-        candidate_disks: "{{ vm_record.disks | selectattr('size_gb', '<', five_tb_gb) | selectattr('size_gb', '<=', budget_remaining_gb | float) | list }}"
+        candidate_disks_sorted: "{{ vm_record.disks | selectattr('size_gb', '<', five_tb_gb) | list | sort(attribute='size_gb') }}"
+        removed_disk_keys: []
 
-    - name: No disk on this VM fits this run - leave it for next time
+    - name: No disk on this VM fits this run at all - leave it for next time
       ansible.builtin.debug:
         msg: "{{ vm_record.server_name }}: no qualifying disk fits the remaining {{ budget_remaining_gb }} GB budget this run - skipping until next run."
-      when: candidate_disks | length == 0
+      when: (candidate_disks_sorted | length == 0) or ((candidate_disks_sorted | first).size_gb | float) > (budget_remaining_gb | float)
 
-    - name: Handle this VM's disk/VM removal
-      when: candidate_disks | length > 0
+    - name: Remove each qualifying disk that still fits the remaining run budget
+      when: (budget_remaining_gb | float) >= (item.size_gb | float)
+      loop: "{{ candidate_disks_sorted }}"
+      loop_control:
+        label: "{{ item.label }}"
       block:
 
-        - name: Pick the largest disk that fits the remaining budget
-          ansible.builtin.set_fact:
-            disk_to_remove: "{{ (candidate_disks | sort(attribute='size_gb') | list | last) }}"
-
-        - name: Remove the selected disk
+        - name: "Remove disk: {{ item.label }}"
           community.vmware.vmware_guest_disk:
             hostname: '{{ lookup("env", "VMWARE_HOST") }}'
             username: '{{ lookup("env", "VMWARE_USER") }}'
@@ -41,17 +45,21 @@
             name: "{{ vm_record.server_name }}"
             disk:
               - state: absent
-                controller_number: "{{ disk_to_remove.scsi_controller }}"
-                unit_number: "{{ disk_to_remove.unit_number }}"
+                controller_number: "{{ item.scsi_controller }}"
+                unit_number: "{{ item.unit_number }}"
 
-        - name: Deduct this disk from the run's remaining budget
+        - name: Track this removal against the run budget
           ansible.builtin.set_fact:
-            budget_remaining_gb: "{{ (budget_remaining_gb | float) - (disk_to_remove.size_gb | float) }}"
-            processed_count: "{{ (processed_count | int) + 1 }}"
+            removed_disk_keys: "{{ removed_disk_keys + [item.disk_key] }}"
+            budget_remaining_gb: "{{ (budget_remaining_gb | float) - (item.size_gb | float) }}"
 
-        - name: Work out what's left on this VM after removal
+    - name: Log the outcome for this VM (only if at least one disk was removed)
+      when: removed_disk_keys | length > 0
+      block:
+
+        - name: Work out what's left on this VM after removals
           ansible.builtin.set_fact:
-            remaining_disks: "{{ vm_record.disks | rejectattr('disk_key', 'equalto', disk_to_remove.disk_key) | list }}"
+            remaining_disks: "{{ vm_record.disks | rejectattr('disk_key', 'in', removed_disk_keys) | list }}"
 
         - name: Remove the whole VM if no disks remain
           when: remaining_disks | length == 0
@@ -83,6 +91,10 @@
                 create: true
                 insertafter: EOF
 
+            - name: Count this VM as processed
+              ansible.builtin.set_fact:
+                processed_count: "{{ (processed_count | int) + 1 }}"
+
         - name: Log the remaining disks if the VM still has some
           when: remaining_disks | length > 0
           block:
@@ -100,7 +112,7 @@
                     'original_name': vm_record.original_name,
                     'shutdown_date': vm_record.shutdown_date,
                     'status': 'disks_partial_removed',
-                    'disk_removed': disk_to_remove.disk_key,
+                    'disks_removed': removed_disk_keys,
                     'disks': remaining_disks,
                     'total_disk_gb': remaining_total_gb,
                     'needs_manual_review': remaining_needs_manual_review,
@@ -108,4 +120,8 @@
                   } | to_json }}
                 create: true
                 insertafter: EOF
+
+            - name: Count this VM as processed
+              ansible.builtin.set_fact:
+                processed_count: "{{ (processed_count | int) + 1 }}"
 
