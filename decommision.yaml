@@ -1,0 +1,181 @@
+
+# vm_decommission_scheduled_job.yml
+# Runs HOURLY. Reads the decommission list (JSONL, append-only) and, for
+# eligible VMs:
+#   1. Checks whether shutdown_date is 7+ days ago
+#   2. Removes ONE disk under 5TB from each eligible VM
+#   3. Caps the TOTAL size removed in this run at 5TB, across ALL VMs
+#      combined - even if more VMs/disks qualify, once the 5TB budget
+#      for this run is used up, everything else waits for the next run
+#   4. Appends an updated record (remaining disks only) after each
+#      removal, so the next run naturally "forgets" the disk that was
+#      already removed and just works from what's left
+#
+# VMs flagged needs_manual_review are skipped entirely - by definition
+# they have no disk under 5TB, so this job could never make progress on
+# them automatically.
+#
+# Once a VM's disk list is empty, the VM itself is removed.
+
+- name: Scheduled VM decommission processing (hourly)
+  hosts: localhost
+  gather_facts: true   # needed for ansible_date_time.date
+
+  vars:
+    git_repo_url: "https://github.com/maydin82/aap-decom-vm.git"   # <-- set this to your actual repo
+    repo_path: "/tmp/track"
+    repo_name: "aap-decom-vm"
+    github_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
+    github_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
+    log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
+    repo_branch: "main"
+    min_days_before_action: 7
+    five_tb_gb: 5120                # 5TB threshold for a single disk
+    per_run_removal_budget_gb: 5120 # max total GB removed in one run, across all VMs
+
+  tasks:
+
+    # ---------------------------------------------------------------
+    # 0. Clone the repo fresh - AAP execution environments are
+    #    ephemeral, so there's no persistent clone to pull into.
+    # ---------------------------------------------------------------
+    - name: Clone the repo
+      ansible.builtin.git:
+        repo: "https://{{ github_username }}:{{ github_token }}@github.com/{{ github_username }}/{{ repo_name }}.git"
+        dest: "{{ repo_path }}"
+        version: "{{ repo_branch }}"
+
+    - name: Set git identity for commits (container has none by default)
+      ansible.builtin.command:
+        cmd: "git config {{ item }}"
+        chdir: "{{ repo_path }}"
+      loop:
+        - 'user.email "aap-decom-automation@yourorg.com"'
+        - 'user.name "AAP Decom Automation"'
+      changed_when: false
+    - name: Read the decommission list into lines
+      ansible.builtin.set_fact:
+        decom_lines: "{{ lookup('file', log_file).splitlines() }}"
+
+    - name: Parse each non-empty line into a record
+      ansible.builtin.set_fact:
+        decom_records: "{{ decom_records | default([]) + [ item | from_json ] }}"
+      loop: "{{ decom_lines }}"
+      when: item | trim | length > 0
+      loop_control:
+        label: "line {{ ansible_loop.index }}"
+
+    # ---------------------------------------------------------------
+    # Append-only file -> dedupe to the LAST entry per server_name.
+    # That line is this VM's current state; any disk already removed
+    # in a prior run simply won't appear in it anymore.
+    # ---------------------------------------------------------------
+    - name: Reduce to latest record per server
+      ansible.builtin.set_fact:
+        latest_by_server: "{{ latest_by_server | default({}) | combine({item.server_name: item}) }}"
+      loop: "{{ decom_records | default([]) }}"
+      loop_control:
+        label: "{{ item.server_name }}"
+
+    - name: Build list of latest records
+      ansible.builtin.set_fact:
+        latest_records: "{{ latest_by_server | default({}) | dict2items | map(attribute='value') | list }}"
+
+    # ---------------------------------------------------------------
+    # 7-day gate + manual-review skip
+    # ---------------------------------------------------------------
+    - name: Work out days since shutdown, per active pending record
+      ansible.builtin.set_fact:
+        eligible_records: "{{ eligible_records | default([]) + [ item | combine({'days_since_shutdown': days_diff}) ] }}"
+      vars:
+        days_diff: "{{ ((ansible_date_time.date | to_datetime('%Y-%m-%d')) - (item.shutdown_date | to_datetime('%Y-%m-%d'))).days }}"
+      loop: "{{ latest_records | default([]) }}"
+      when:
+        - item.status in ['shutdown_pending_decom', 'disks_partial_removed']
+        - not item.needs_manual_review
+        - (days_diff | int) >= min_days_before_action
+      loop_control:
+        label: "{{ item.server_name }}"
+
+    - name: Report VMs still waiting out the 7-day window (no action taken)
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.server_name }}: {{ ((ansible_date_time.date | to_datetime('%Y-%m-%d')) -
+          (item.shutdown_date | to_datetime('%Y-%m-%d'))).days }} day(s) since shutdown -
+          waiting for {{ min_days_before_action }}, no action taken.
+      loop: "{{ latest_records | default([]) }}"
+      when:
+        - item.status in ['shutdown_pending_decom', 'disks_partial_removed']
+        - not item.needs_manual_review
+        - ((ansible_date_time.date | to_datetime('%Y-%m-%d')) - (item.shutdown_date | to_datetime('%Y-%m-%d'))).days < min_days_before_action
+      loop_control:
+        label: "{{ item.server_name }}"
+
+    - name: Report VMs flagged for manual review (skipped)
+      ansible.builtin.debug:
+        msg: "{{ item.server_name }}: needs_manual_review - no disk under 5TB, skipping automated removal."
+      loop: "{{ latest_records | default([]) }}"
+      when:
+        - item.status in ['shutdown_pending_decom', 'disks_partial_removed']
+        - item.needs_manual_review
+      loop_control:
+        label: "{{ item.server_name }}"
+
+    - name: No eligible VMs this run
+      ansible.builtin.debug:
+        msg: "No VMs have passed the {{ min_days_before_action }}-day window (or all are pending manual review)."
+      when: (eligible_records | default([]) | length) == 0
+
+    # ---------------------------------------------------------------
+    # Process eligible VMs, one disk each, within the per-run budget.
+    # budget_remaining_gb is a running fact - each processed VM reduces
+    # it, and later iterations see the updated value.
+    # ---------------------------------------------------------------
+    - name: Initialize this run's removal budget
+      ansible.builtin.set_fact:
+        budget_remaining_gb: "{{ per_run_removal_budget_gb | float }}"
+        processed_count: 0
+
+    - name: Process eligible VMs against the shared per-run budget
+      ansible.builtin.include_tasks: process_single_vm.yml
+      loop: "{{ eligible_records | default([]) }}"
+      loop_control:
+        loop_var: vm_record
+        label: "{{ vm_record.server_name }}"
+
+    - name: Report budget usage for this run
+      ansible.builtin.debug:
+        msg: >-
+          Removed disk(s) from {{ processed_count }} VM(s) this run.
+          Budget used: {{ (per_run_removal_budget_gb | float) - (budget_remaining_gb | float) }} GB
+          of {{ per_run_removal_budget_gb }} GB.
+
+    # ---------------------------------------------------------------
+    # Commit and push all appended status updates in one go
+    # ---------------------------------------------------------------
+    - name: Stage, commit, and push updates
+      when: processed_count | int > 0
+      block:
+        - name: git add
+          ansible.builtin.command:
+            cmd: git add decommissioned_vms.jsonl
+            chdir: "{{ repo_path }}"
+
+        - name: git commit
+          ansible.builtin.command:
+            cmd: >
+              git commit -m "Scheduled decom run {{ ansible_date_time.iso8601 }}: processed {{ processed_count }} VM(s)"
+            chdir: "{{ repo_path }}"
+          register: commit_result
+          failed_when: false
+
+        - name: git push
+          ansible.builtin.command:
+            cmd: git push origin {{ repo_branch }}
+            chdir: "{{ repo_path }}"
+          when: commit_result.rc == 0
+          register: push_result
+          retries: 3
+          delay: 5
+          until: push_result.rc == 0
+
