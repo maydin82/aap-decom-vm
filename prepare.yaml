@@ -42,17 +42,12 @@
     # 0. Clone the repo fresh - AAP execution environments are
     #    ephemeral, so there's no persistent clone to pull into.
     # ---------------------------------------------------------------
-    - name: Build authenticated clone URL (kept out of logs)
-      ansible.builtin.set_fact:
-        git_repo_url_authenticated: "https://{{ git_username }}:{{ git_token }}@{{ git_repo_url | regex_replace('^https://', '') }}"
-      no_log: true
 
     - name: Clone the repo
       ansible.builtin.git:
         repo: "https://{{ github_username }}:{{ github_token }}@github.com/{{ github_username }}/{{ repo_name }}.git"
         dest: "{{ repo_path }}"
         version: "{{ repo_branch }}"
-      no_log: true
 
     - name: Set git identity for commits (container has none by default)
       ansible.builtin.command:
