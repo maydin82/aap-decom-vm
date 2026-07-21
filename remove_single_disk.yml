@@ -7,9 +7,9 @@
 
 - name: "Remove disk: {{ item.label }}"
   community.vmware.vmware_guest_disk:
-    hostname: '{{ lookup("env", "VMWARE_HOST") }}'
-    username: '{{ lookup("env", "VMWARE_USER") }}'
-    password: '{{ lookup("env", "VMWARE_PASSWORD") }}'
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
     datacenter: "{{ vcenter_datacenter }}"
     validate_certs: false
     name: "{{ vm_record.server_name }}"
