@@ -3,17 +3,17 @@
 # Runs HOURLY. Reads the decommission list (JSONL, append-only) and, for
 # eligible VMs:
 #   1. Checks whether shutdown_date is 7+ days ago
-#   2. Removes ONE disk under 5TB from each eligible VM
-#   3. Caps the TOTAL size removed in this run at 5TB, across ALL VMs
-#      combined - even if more VMs/disks qualify, once the 5TB budget
-#      for this run is used up, everything else waits for the next run
+#   2. Removes any disks under max_disk_removal_gb from each eligible VM
+#   3. Caps the TOTAL size removed in this run at max_disk_removal_gb,
+#      across ALL VMs combined - even if more VMs/disks qualify, once
+#      that budget is used up, everything else waits for the next run
 #   4. Appends an updated record (remaining disks only) after each
 #      removal, so the next run naturally "forgets" the disk that was
 #      already removed and just works from what's left
 #
 # VMs flagged needs_manual_review are skipped entirely - by definition
-# they have no disk under 5TB, so this job could never make progress on
-# them automatically.
+# they have no disk under max_disk_removal_gb, so this job could never
+# make progress on them automatically.
 #
 # Once a VM's disk list is empty, the VM itself is removed.
 
@@ -21,17 +21,8 @@
   hosts: localhost
   gather_facts: true   # needed for ansible_date_time.date
 
-  vars:
-    repo_path: "/tmp/track"
-    repo_name: "aap-decom-vm"
-    github_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
-    github_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
-    repo_path: "/tmp/decom-tracking"
-    log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
-    repo_branch: "main"
-    min_days_before_action: 7
-    five_tb_gb: 5120                # 5TB threshold for a single disk
-    per_run_removal_budget_gb: 5120 # max total GB removed in one run, across all VMs
+  vars_files:
+    - vars.yml
 
   tasks:
 
@@ -136,6 +127,11 @@
         msg: "No VMs have passed the {{ min_days_before_action }}-day window (or all are pending manual review)."
       when: (eligible_records | default([]) | length) == 0
 
+    - name: Sort eligible VMs oldest-shutdown-first before spending the run budget
+      ansible.builtin.set_fact:
+        eligible_records: "{{ eligible_records | default([]) | sort(attribute='shutdown_date') }}"
+      when: (eligible_records | default([]) | length) > 0
+
     # ---------------------------------------------------------------
     # Process eligible VMs, one disk each, within the per-run budget.
     # budget_remaining_gb is a running fact - each processed VM reduces
@@ -143,7 +139,7 @@
     # ---------------------------------------------------------------
     - name: Initialize this run's removal budget
       ansible.builtin.set_fact:
-        budget_remaining_gb: "{{ per_run_removal_budget_gb | float }}"
+        budget_remaining_gb: "{{ max_disk_removal_gb | float }}"
         processed_count: 0
 
     - name: Process eligible VMs against the shared per-run budget
@@ -157,8 +153,8 @@
       ansible.builtin.debug:
         msg: >-
           Removed disk(s) from {{ processed_count }} VM(s) this run.
-          Budget used: {{ (per_run_removal_budget_gb | float) - (budget_remaining_gb | float) }} GB
-          of {{ per_run_removal_budget_gb }} GB.
+          Budget used: {{ (max_disk_removal_gb | float) - (budget_remaining_gb | float) }} GB
+          of {{ max_disk_removal_gb }} GB.
 
     # ---------------------------------------------------------------
     # Commit and push all appended status updates in one go

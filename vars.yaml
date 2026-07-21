@@ -1,0 +1,69 @@
+---
+# vars.yml
+# Shared variables for the VM decommission automation:
+#   - vm_decommission_log.yml
+#   - vm_decommission_scheduled_job.yml
+#   - process_single_vm.yml / remove_single_disk.yml (included by the above)
+#
+# Include in each playbook with:
+#   vars_files:
+#     - vars.yml
+
+# ---------------------------------------------------------------
+# vCenter selection
+# ---------------------------------------------------------------
+# The customer picks which vCenter to target via the AAP survey - a
+# multiple-choice field named "vcenter_choice" (e.g. vcenter1 / vcenter2).
+# Everything else about that vCenter (hostname, credentials, datacenter)
+# is looked up below from that single choice. Add one entry per vCenter
+# you manage.
+#
+# Usernames/passwords should come from AAP Credentials (Custom Credential
+# Type) or Vault - NOT hardcoded here. The per-vcenter var names below
+# (vcenter1_username, vcenter1_password, etc.) are what you'd expose via
+# each vCenter's credential injector, or define per-vcenter in a vault file.
+vcenter_choice: "{{ vcenter_choice | default('vcenter1') }}"
+
+vcenters:
+  vcenter1:
+    hostname: "vcenter1.example.com"
+    username: "{{ vcenter1_username }}"
+    password: "{{ vcenter1_password }}"
+    datacenter: "DC1"
+  vcenter2:
+    hostname: "vcenter2.example.com"
+    username: "{{ vcenter2_username }}"
+    password: "{{ vcenter2_password }}"
+    datacenter: "DC2"
+
+# Playbooks reference these four - resolved from vcenter_choice above.
+vcenter_hostname: "{{ vcenters[vcenter_choice].hostname }}"
+vcenter_username: "{{ vcenters[vcenter_choice].username }}"
+vcenter_password: "{{ vcenters[vcenter_choice].password }}"
+vcenter_datacenter: "{{ vcenters[vcenter_choice].datacenter }}"
+
+# ---------------------------------------------------------------
+# Git repo for the decommission tracking file
+# ---------------------------------------------------------------
+repo_path: "/tmp/track"
+repo_name: "aap-decom-vm"
+repo_branch: "main"
+github_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
+github_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
+log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
+
+# ---------------------------------------------------------------
+# Decommission behavior
+# ---------------------------------------------------------------
+decom_prefix: "willberemoved-"
+min_days_before_action: 7
+
+# Single threshold, in GB, used for BOTH:
+#   - which individual disks qualify for automatic removal (a disk
+#     must be smaller than this to ever be touched automatically)
+#   - the maximum TOTAL size removed across ALL VMs combined in one
+#     scheduled run (a run never removes more than this much overall)
+#
+# 5120 = 5TB if you mean binary/TiB-based TB. Use 5000 for decimal TB.
+max_disk_removal_gb: 5120
+

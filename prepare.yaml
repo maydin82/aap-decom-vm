@@ -21,20 +21,20 @@
 # shutdown_date is NOT passed in - it's captured automatically at the
 # moment the VM is shut down.
 
+# Expects these vars to be set:
+#   vm_name        : ORIGINAL name of the server being decommissioned
+#   vcenter_choice : which vCenter to target (from the AAP survey) -
+#                    resolves hostname/credentials/datacenter via vars.yml
+#
+# shutdown_date is NOT passed in - it's captured automatically at the
+# moment the VM is shut down.
+
 - name: Shut down, rename, and queue VM for decommission
   hosts: localhost
   gather_facts: true   # needed for ansible_date_time.date
 
-  vars:
-    repo_path: "/tmp/track"
-    repo_name: "aap-decom-vm"
-    github_username: "{{ git_username }}"   # inject via AAP credential/extra vars, not hardcoded
-    github_token: "{{ git_token }}"         # inject via AAP credential/extra vars, not hardcoded
-    repo_path: "/tmp/decom-tracking"
-    log_file: "{{ repo_path }}/decommissioned_vms.jsonl"
-    repo_branch: "main"
-    five_tb_gb: 5120   # 5 TB in GB (binary/TiB-based; use 5000 for decimal TB)
-    decom_prefix: "willberemoved-"
+  vars_files:
+    - vars.yml
 
   tasks:
 
@@ -74,7 +74,7 @@
         datacenter: "{{ vcenter_datacenter }}"
         validate_certs: false
         name: "{{ vm_name }}"
-        state: powered-off
+        state: shutdown-guest
       register: shutdown_result
 
     - name: Capture the shutdown date automatically
@@ -186,7 +186,7 @@
     # ---------------------------------------------------------------
     - name: Flag for manual review if no disk qualifies (all disks 5TB+)
       ansible.builtin.set_fact:
-        needs_manual_review: "{{ (vm_disks | selectattr('size_gb', '<', five_tb_gb) | list | length) == 0 }}"
+        needs_manual_review: "{{ (vm_disks | selectattr('size_gb', '<', max_disk_removal_gb) | list | length) == 0 }}"
 
     # ---------------------------------------------------------------
     # 5. Log the record (git pull -> append JSONL line -> commit/push)

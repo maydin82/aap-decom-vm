@@ -20,7 +20,7 @@
 
     - name: Sort this VM's qualifying disks (smallest first, to fit as many as possible)
       ansible.builtin.set_fact:
-        candidate_disks_sorted: "{{ vm_record.disks | selectattr('size_gb', '<', five_tb_gb) | list | sort(attribute='size_gb') }}"
+        candidate_disks_sorted: "{{ vm_record.disks | selectattr('size_gb', '<', max_disk_removal_gb) | list | sort(attribute='size_gb') }}"
         removed_disk_keys: []
 
     - name: No disk on this VM fits this run at all - leave it for next time
@@ -83,7 +83,7 @@
             - name: Recompute remaining total and manual-review flag
               ansible.builtin.set_fact:
                 remaining_total_gb: "{{ remaining_disks | map(attribute='size_gb') | map('float') | sum }}"
-                remaining_needs_manual_review: "{{ (remaining_disks | selectattr('size_gb', '<', five_tb_gb) | list | length) == 0 }}"
+                remaining_needs_manual_review: "{{ (remaining_disks | selectattr('size_gb', '<', max_disk_removal_gb) | list | length) == 0 }}"
 
             - name: Append "disks_partial_removed" status line
               ansible.builtin.lineinfile:
