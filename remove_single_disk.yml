@@ -21,7 +21,8 @@
         controller_number: "{{ item.scsi_controller }}"
         unit_number: "{{ item.unit_number }}"
 
-- name: Track this removal against the run budget
+- name: Track this removal against this vCenter's run budget
   ansible.builtin.set_fact:
     removed_disk_keys: "{{ removed_disk_keys + [item.disk_key] }}"
-    budget_remaining_gb: "{{ (budget_remaining_gb | float) - (item.size_gb | float) }}"
+    budget_remaining_gb: "{{ budget_remaining_gb | combine({ vm_record.vcenter_name: ((budget_remaining_gb[vm_record.vcenter_name] | float) - (item.size_gb | float)) }) }}"
+

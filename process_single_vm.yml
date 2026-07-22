@@ -2,10 +2,11 @@
 # process_single_vm.yml
 # Included per eligible VM (vm_record) from vm_decommission_scheduled_job.yml.
 #
-# Removes AS MANY qualifying disks (under 5TB each) from this VM as fit
-# within the shared per-run budget (budget_remaining_gb, a fact that
-# persists and decreases across the whole loop in the parent playbook -
-# so a big VM here leaves less budget for the next VM in the loop).
+# Removes AS MANY qualifying disks (under max_disk_removal_gb each) from
+# this VM as fit within that VM's OWN VCENTER's remaining budget this
+# run. budget_remaining_gb is a dict keyed by vcenter_name - each vCenter
+# gets its own max_disk_removal_gb budget, independent of every other
+# vCenter. A VM from vcenter1 never affects vcenter2's budget.
 #
 # If ALL disks end up removed (either already gone, or removed this run),
 # the VM itself is removed too - all in the same run, no waiting for a
@@ -14,30 +15,37 @@
 # Always appends a new line to the log file rather than editing history -
 # the next scheduled run works from whatever this new line says.
 
-- name: Process this VM only if the run's removal budget isn't already used up
-  when: (budget_remaining_gb | float) > 0
-  block:
+- name: Resolve this VM's vCenter connection info from its own record (not vcenter_choice)
+  ansible.builtin.set_fact:
+    vm_vcenter: "{{ vcenters[vm_record.vcenter_name] }}"
 
-    - name: Resolve this VM's vCenter connection info from its own record (not vcenter_choice)
-      ansible.builtin.set_fact:
-        vm_vcenter: "{{ vcenters[vm_record.vcenter_name] }}"
+- name: Initialize this vCenter's budget for the run, if not seen yet
+  ansible.builtin.set_fact:
+    budget_remaining_gb: "{{ budget_remaining_gb | combine({ vm_record.vcenter_name: (budget_remaining_gb[vm_record.vcenter_name] | default(max_disk_removal_gb)) }) }}"
+
+- name: Process this VM only if its vCenter's budget isn't already used up this run
+  when: (budget_remaining_gb[vm_record.vcenter_name] | float) > 0
+  block:
 
     - name: Sort this VM's qualifying disks (smallest first, to fit as many as possible)
       ansible.builtin.set_fact:
         candidate_disks_sorted: "{{ vm_record.disks | selectattr('size_gb', '<', max_disk_removal_gb) | list | sort(attribute='size_gb') }}"
         removed_disk_keys: []
 
-    - name: No disk on this VM fits this run at all - leave it for next time
+    - name: No disk on this VM fits this vCenter's remaining budget - leave it for next time
       ansible.builtin.debug:
-        msg: "{{ vm_record.server_name }}: no qualifying disk fits the remaining {{ budget_remaining_gb }} GB budget this run - skipping until next run."
-      when: (candidate_disks_sorted | length == 0) or ((candidate_disks_sorted | first).size_gb | float) > (budget_remaining_gb | float)
+        msg: >-
+          {{ vm_record.server_name }} ({{ vm_record.vcenter_name }}): no qualifying disk fits the
+          remaining {{ budget_remaining_gb[vm_record.vcenter_name] }} GB budget for this vCenter
+          this run - skipping until next run.
+      when: (candidate_disks_sorted | length == 0) or ((candidate_disks_sorted | first).size_gb | float) > (budget_remaining_gb[vm_record.vcenter_name] | float)
 
-    - name: Remove each qualifying disk that still fits the remaining run budget
+    - name: Remove each qualifying disk that still fits this vCenter's remaining budget
       ansible.builtin.include_tasks: remove_single_disk.yml
       loop: "{{ candidate_disks_sorted }}"
       loop_control:
         label: "{{ item.label }}"
-      when: (budget_remaining_gb | float) >= (item.size_gb | float)
+      when: (budget_remaining_gb[vm_record.vcenter_name] | float) >= (item.size_gb | float)
 
     - name: Log the outcome for this VM (only if at least one disk was removed)
       when: removed_disk_keys | length > 0
