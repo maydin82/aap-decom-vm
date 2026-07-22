@@ -202,6 +202,8 @@
         decom_record:
           server_name: "{{ renamed_vm_name }}"
           original_name: "{{ vm_name }}"
+          vcenter_name: "{{ vcenter_choice }}"
+          datacenter: "{{ vcenter_datacenter }}"
           shutdown_date: "{{ shutdown_date }}"
           status: "shutdown_pending_decom"
           disks: "{{ vm_disks }}"
