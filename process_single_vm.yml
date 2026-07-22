@@ -18,6 +18,10 @@
   when: (budget_remaining_gb | float) > 0
   block:
 
+    - name: Resolve this VM's vCenter connection info from its own record (not vcenter_choice)
+      ansible.builtin.set_fact:
+        vm_vcenter: "{{ vcenters[vm_record.vcenter_name] }}"
+
     - name: Sort this VM's qualifying disks (smallest first, to fit as many as possible)
       ansible.builtin.set_fact:
         candidate_disks_sorted: "{{ vm_record.disks | selectattr('size_gb', '<', max_disk_removal_gb) | list | sort(attribute='size_gb') }}"
@@ -48,10 +52,10 @@
           block:
             - name: Remove the VM (no disks left to track)
               community.vmware.vmware_guest:
-                hostname: "{{ vcenter_hostname }}"
-                username: "{{ vcenter_username }}"
-                password: "{{ vcenter_password }}"
-                datacenter: "{{ vcenter_datacenter }}"
+                hostname: "{{ vm_vcenter.hostname }}"
+                username: "{{ vm_vcenter.username }}"
+                password: "{{ vm_vcenter.password }}"
+                datacenter: "{{ vm_vcenter.datacenter }}"
                 validate_certs: false
                 name: "{{ vm_record.server_name }}"
                 state: absent
@@ -63,6 +67,8 @@
                   {{ {
                     'server_name': vm_record.server_name,
                     'original_name': vm_record.original_name,
+                    'vcenter_name': vm_record.vcenter_name,
+                    'datacenter': vm_record.datacenter,
                     'shutdown_date': vm_record.shutdown_date,
                     'status': 'vm_removed',
                     'disks': [],
@@ -92,6 +98,8 @@
                   {{ {
                     'server_name': vm_record.server_name,
                     'original_name': vm_record.original_name,
+                    'vcenter_name': vm_record.vcenter_name,
+                    'datacenter': vm_record.datacenter,
                     'shutdown_date': vm_record.shutdown_date,
                     'status': 'disks_partial_removed',
                     'disks_removed': removed_disk_keys,

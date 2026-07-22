@@ -4,13 +4,16 @@
 # Removes the disk and deducts it from the shared run budget.
 # 'when' on the include_tasks call in process_single_vm.yml already
 # ensures this only runs if the disk fits the remaining budget.
+#
+# Uses vm_vcenter (resolved by process_single_vm.yml from this VM's OWN
+# log record - vcenter_name/datacenter - not from vcenter_choice/vars.yml).
 
 - name: "Remove disk: {{ item.label }}"
   community.vmware.vmware_guest_disk:
-    hostname: "{{ vcenter_hostname }}"
-    username: "{{ vcenter_username }}"
-    password: "{{ vcenter_password }}"
-    datacenter: "{{ vcenter_datacenter }}"
+    hostname: "{{ vm_vcenter.hostname }}"
+    username: "{{ vm_vcenter.username }}"
+    password: "{{ vm_vcenter.password }}"
+    datacenter: "{{ vm_vcenter.datacenter }}"
     validate_certs: false
     name: "{{ vm_record.server_name }}"
     disk:

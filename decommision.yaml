@@ -16,6 +16,13 @@
 # make progress on them automatically.
 #
 # Once a VM's disk list is empty, the VM itself is removed.
+#
+# vCenter connection: this job does NOT use vcenter_choice. Each eligible
+# VM's own log record already says which vCenter/datacenter it came from
+# (vcenter_name / datacenter, recorded at shutdown time) - process_single_vm.yml
+# resolves the actual connection details per VM from the 'vcenters' dict
+# in vars.yml, so VMs from different vCenters in the same list are each
+# handled against their own vCenter correctly.
 
 - name: Scheduled VM decommission processing (hourly)
   hosts: localhost
