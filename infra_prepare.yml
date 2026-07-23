@@ -4,20 +4,22 @@
   connection: local
   vars_files:
     - infra-prepare-vars/secrets.yaml
-  
-  #aap_hostname: aap.example.com
-  #aap_username: admin
-  #aap_password: changeme
+ # vars: 
+ #   aap_hostname: 
+ #   aap_username: 
+ #   aap_password: 
   pre_tasks:
     - name: Include vars from platform_configs directory
       ansible.builtin.include_vars:
-        dir: ./aap-configure-vars
+        dir: ./infra-prepare-vars
 #        ignore_files: [secrets.yml]
-        extensions: ["yaml,yml"]
+        extensions: 
+          - 'yml'
+          - 'yaml'
   roles:
-    - {role: infra.aap_configuration.controller_projects, when: controller_projects is defined}
-    - {role: infra.aap_configuration.controller_templates, when: controller_templates is defined}
+    - {role: infra.aap_configuration.controller_credential_types, when: credential_types is defined}
     - {role: infra.aap_configuration.controller_credentials, when: controller_credentials is defined}
-    - {role: infra.aap_configuration.controller_credential_types, when: controller_credential_types is defined}
-    - {role: infra.aap_configuration.controller_credential_inventories, when: controller_credential_inventories is defined}
-    - {role: infra.aap_configuration.controller_credential_hosts, when: controller_credential_hosts is defined}
+    - {role: infra.aap_configuration.controller_inventories, when: controller_inventories is defined}
+    - {role: infra.aap_configuration.controller_hosts, when: controller_hosts is defined}
+#    - {role: infra.aap_configuration.controller_projects, when: controller_projects is defined}
+    - {role: infra.aap_configuration.controller_job_templates, when: controller_templates is defined}
