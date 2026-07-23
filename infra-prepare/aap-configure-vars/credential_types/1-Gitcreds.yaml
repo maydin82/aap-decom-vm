@@ -1,0 +1,22 @@
+---
+controller_credential_types:
+  - name: "GIT creds"
+    kind: "cloud"
+    inputs:
+        fields:
+        - id: git_username
+          type: string
+          label: Git Username
+        - id: git_token
+          type: string
+          label: Git Token / PAT
+          secret: true
+        required:
+        - git_username
+        - git_token
+
+    injectors:
+        extra_vars:
+          git_token: "{%- raw -%} '{{ git_token }}' {%- endraw -%}"
+          git_username: "{%- raw -%} '{{ git_username }}' {%- endraw -%}"
+
