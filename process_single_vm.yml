@@ -58,6 +58,16 @@
         - name: Remove the whole VM if no disks remain
           when: remaining_disks | length == 0
           block:
+            - name: Remove any snapshots on the VM before removal
+              community.vmware.vmware_guest_snapshot:
+                hostname: "{{ vm_vcenter.hostname }}"
+                username: "{{ vm_vcenter.username }}"
+                password: "{{ vm_vcenter.password }}"
+                datacenter: "{{ vm_vcenter.datacenter }}"
+                validate_certs: false
+                name: "{{ vm_record.server_name }}"
+                state: absent
+                remove_all: true
             - name: Remove the VM (no disks left to track)
               community.vmware.vmware_guest:
                 hostname: "{{ vm_vcenter.hostname }}"
