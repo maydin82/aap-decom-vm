@@ -4,7 +4,7 @@ controller_templates:
     organization: "Default"
     project: "Demo Project"
     inventory: "Demo Inventory"
-    playbook: "prepare.yaml"
+    playbook: "hello_world.yml"   #"prepare.yaml"
     scm_branch: ""
     forks: 0
     limit: ""
