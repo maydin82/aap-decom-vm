@@ -2,9 +2,9 @@
 controller_templates:
   - name: "vmware_prepare"
     organization: "Default"
-    project: "Demo Project"
+    project: "vm_decom"
     inventory: "Demo Inventory"
-    playbook: "hello_world.yml"   #"prepare.yaml"
+    playbook: "prepare.yaml"
     scm_branch: ""
     forks: 0
     limit: ""
@@ -13,7 +13,7 @@ controller_templates:
     job_slice_count: 1
     use_fact_cache: false
     credentials:
-#      - "GIT-custom"
+      - "GIT-custom"
       - "varfile"
     allow_simultaneous: false
     ask_scm_branch_on_launch: false
