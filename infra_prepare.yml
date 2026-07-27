@@ -13,7 +13,7 @@
           - 'yml'
           - 'yaml'
   roles:
-    - {role: infra.controller_configuration.credential_types, when: credential_types is defined}
+    - {role: infra.controller_configuration.credential_types, when: controller_credential_types is defined}
 #    - {role: infra.controller_configuration.credentials, when: controller_credentials is defined}
 #    - {role: infra.aap_configuration.controller_inventories, when: controller_inventories is defined}
 #    - {role: infra.aap_configuration.controller_hosts, when: controller_hosts is defined}
