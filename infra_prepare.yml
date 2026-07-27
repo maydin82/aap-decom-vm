@@ -22,4 +22,4 @@
 #    - {role: infra.aap_configuration.controller_inventories, when: controller_inventories is defined}
 #    - {role: infra.aap_configuration.controller_hosts, when: controller_hosts is defined}
 #    - {role: infra.aap_configuration.controller_projects, when: controller_projects is defined}
-#    - {role: infra.aap_configuration.controller_job_templates, when: controller_templates is defined}
+    - {role: infra.controller_configuration.controller_job_templates, when: controller_templates is defined}
