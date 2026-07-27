@@ -2,7 +2,7 @@
 controller_templates:
   - name: "vmware_prepare"
     organization: "Default"
-    project: "vm_decom"
+    project: "Demo Project"
     inventory: "Demo Inventory"
     playbook: "prepare.yaml"
     scm_branch: ""
