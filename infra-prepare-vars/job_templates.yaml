@@ -54,7 +54,6 @@ controller_templates:
           min: 0
           type: multiplechoice
           choices: "vcenter1\nvcenter2\nvcenter3"
-          default: "{%- raw -%}vcenter1{%- endraw -%}"
           required: True
           variable: vcenter_choice
           new_question: True
