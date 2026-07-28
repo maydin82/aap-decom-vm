@@ -3,10 +3,11 @@
 # Runs HOURLY. Reads the decommission list (JSONL, append-only) and, for
 # eligible VMs:
 #   1. Checks whether shutdown_date is 7+ days ago
-#   2. Removes any disks under max_disk_removal_gb from each eligible VM
-#   3. Caps the TOTAL size removed in this run at max_disk_removal_gb,
-#      across ALL VMs combined - even if more VMs/disks qualify, once
-#      that budget is used up, everything else waits for the next run
+#   2. Removes any disks under max_disk_removal_gb from each eligible VM,
+#      capped per VCENTER (see step 3) - decided in one deterministic
+#      pass per VM before any removal happens (see process_single_vm.yml)
+#   3. Caps the TOTAL size removed in this run at max_disk_removal_gb PER
+#      VCENTER - a VM's vCenter never affects another vCenter's budget
 #   4. Appends an updated record (remaining disks only) after each
 #      removal, so the next run naturally "forgets" the disk that was
 #      already removed and just works from what's left
@@ -36,18 +37,16 @@
     # ---------------------------------------------------------------
     # 0. Clone the repo fresh - AAP execution environments are
     #    ephemeral, so there's no persistent clone to pull into.
+    #    SSH access via a private key (from an AAP Machine/SCM
+    #    credential attached to this Job Template).
     # ---------------------------------------------------------------
-    - name: Build authenticated clone URL (kept out of logs)
-      ansible.builtin.set_fact:
-        git_repo_url_authenticated: "https://{{ github_username }}:{{ github_token }}@github.com/maydin82/{{ repo_name }}.git"
-      no_log: true
-
-    - name: Clone the repo
+    - name: Clone the repo (SSH)
       ansible.builtin.git:
-        repo: "{{ git_repo_url_authenticated }}"
+        repo: "{{ git_repo_url_ssh }}"
         dest: "{{ repo_path }}"
         version: "{{ repo_branch }}"
-      no_log: true
+        key_file: "{{ git_ssh_key_file }}"
+        accept_hostkey: true
 
     - name: Set git identity for commits (container has none by default)
       ansible.builtin.command:
@@ -151,7 +150,6 @@
     - name: Initialize this run's removal budget tracking (per vCenter, filled in as needed)
       ansible.builtin.set_fact:
         budget_remaining_gb: {}
-        processed_count: 0
 
     - name: Process eligible VMs against their own vCenter's per-run budget
       ansible.builtin.include_tasks: process_single_vm.yml
@@ -169,15 +167,21 @@
       loop_control:
         label: "{{ item.key }}"
 
-    - name: Report total VMs processed this run
-      ansible.builtin.debug:
-        msg: "Removed disk(s) and/or VM(s) for {{ processed_count }} VM(s) this run, across {{ budget_remaining_gb | length }} vCenter(s)."
+    # ---------------------------------------------------------------
+    # Commit and push all appended status updates in one go. Gated on
+    # ACTUAL git status rather than a counter fact - this is authoritative
+    # regardless of how deeply nested the tasks were that wrote to the
+    # file, so it can't silently skip a real change.
+    # ---------------------------------------------------------------
+    - name: Check whether the log file actually changed this run
+      ansible.builtin.command:
+        cmd: git status --porcelain
+        chdir: "{{ repo_path }}"
+      register: git_status
+      changed_when: false
 
-    # ---------------------------------------------------------------
-    # Commit and push all appended status updates in one go
-    # ---------------------------------------------------------------
     - name: Stage, commit, and push updates
-      when: processed_count | int > 0
+      when: (git_status.stdout | trim | length) > 0
       block:
         - name: git add
           ansible.builtin.command:
@@ -187,7 +191,7 @@
         - name: git commit
           ansible.builtin.command:
             cmd: >
-              git commit -m "Scheduled decom run {{ ansible_date_time.iso8601 }}: processed {{ processed_count }} VM(s)"
+              git commit -m "Scheduled decom run {{ ansible_date_time.iso8601 }}"
             chdir: "{{ repo_path }}"
           register: commit_result
           failed_when: false
@@ -196,9 +200,10 @@
           ansible.builtin.command:
             cmd: git push origin {{ repo_branch }}
             chdir: "{{ repo_path }}"
+          environment:
+            GIT_SSH_COMMAND: "ssh -i {{ git_ssh_key_file }} -o StrictHostKeyChecking=accept-new"
           when: commit_result.rc == 0
           register: push_result
           retries: 3
           delay: 5
           until: push_result.rc == 0
-

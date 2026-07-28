@@ -1,9 +1,9 @@
 ---
 # remove_single_disk.yml
-# Included per candidate disk (item) from process_single_vm.yml's loop.
-# Removes the disk and deducts it from the shared run budget.
-# 'when' on the include_tasks call in process_single_vm.yml already
-# ensures this only runs if the disk fits the remaining budget.
+# Included per disk (item) in the precomputed disks_to_remove list from
+# process_single_vm.yml. By the time this runs, the decision to remove
+# this disk has already been made (budget-checked) - this file just
+# performs the actual removal.
 #
 # Uses vm_vcenter (resolved by process_single_vm.yml from this VM's OWN
 # log record - vcenter_name/datacenter - not from vcenter_choice/vars.yml).
@@ -20,9 +20,3 @@
       - state: absent
         controller_number: "{{ item.scsi_controller }}"
         unit_number: "{{ item.unit_number }}"
-
-- name: Track this removal against this vCenter's run budget
-  ansible.builtin.set_fact:
-    removed_disk_keys: "{{ removed_disk_keys + [item.disk_key] }}"
-    budget_remaining_gb: "{{ budget_remaining_gb | combine({ vm_record.vcenter_name: ((budget_remaining_gb[vm_record.vcenter_name] | float) - (item.size_gb | float)) }) }}"
-
